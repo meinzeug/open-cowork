@@ -8,7 +8,7 @@ import { SafetyDialog } from "./components/SafetyDialog";
 const BACKEND_BASE = "http://localhost:8000";
 
 interface LogEntry {
-  step: int;
+  step: number;
   timestamp: string;
   summary: string;
   action_type: string;
@@ -28,8 +28,8 @@ interface Session {
   status: string;
   provider: string;
   model: string;
-  current_step: int;
-  max_steps: int;
+  current_step: number;
+  max_steps: number;
   logs: LogEntry[];
   pending_action?: any | null;
 }

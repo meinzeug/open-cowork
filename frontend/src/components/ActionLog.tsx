@@ -2,7 +2,7 @@ import React from "react";
 import { Terminal, CheckCircle2, XCircle, AlertCircle, Clock } from "lucide-react";
 
 interface LogEntry {
-  step: int;
+  step: number;
   timestamp: string;
   summary: string;
   action_type: string;
