@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  sandbox:
+    build:
+      context: ./sandbox
+    container_name: open_cowork_sandbox
+    ports:
+      - "6080:6080" # noVNC Web UI
+      - "5001:5001" # Sandbox REST API
+    volumes:
+      - ./workspace:/workspace
+    shm_size: "512mb" # Prevent Firefox crashes due to low shared memory
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    container_name: open_cowork_backend
+    ports:
+      - "8000:8000" # FastAPI backend server
+    volumes:
+      - ./workspace:/workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OLLAMA_API_BASE=${OLLAMA_API_BASE:-http://localhost:11434}
+      - SANDBOX_AGENT_URL=http://sandbox:5001
+    depends_on:
+      - sandbox
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: open_cowork_frontend
+    ports:
+      - "3000:3000" # React Vite dashboard
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules # Do not overwrite node_modules with local mount
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  workspace:
