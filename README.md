@@ -47,13 +47,31 @@ The system operates as a three-tier architecture orchestrated via Docker Compose
     # Edit .env and enter your API keys (e.g., ANTHROPIC_API_KEY)
     ```
 
-3.  Build and run the entire stack:
+3.  Install/check host dependencies once:
     ```bash
-    docker-compose up --build
+    ./install_ubuntu.sh
     ```
 
-4.  Open the web interface:
+4.  Build and run the entire stack:
+    ```bash
+    ./start.sh
+    ```
+
+5.  Open the web interface:
     Access `http://localhost:3000` (or the backend/frontend mapped port) in your web browser.
+
+### Docker daemon troubleshooting
+
+If startup fails with `failed to connect to the docker API at unix:///var/run/docker.sock`, the Docker daemon is not running or your user cannot access it.
+
+```bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+newgrp docker
+./start.sh
+```
+
+On systems without `systemctl`, start Docker through the host's service manager and then rerun `./start.sh`.
 
 ---
 
