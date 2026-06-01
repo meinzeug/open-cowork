@@ -2,6 +2,8 @@
 
 Der Linux Cowork Agent unterstützt ein modulares Provider-System, welches über eine einheitliche Abstraktionsschicht (`BaseProvider`) implementiert ist. Dadurch können LLMs verschiedener Anbieter mit minimalem Aufwand eingebunden werden.
 
+Die im Frontend gewählte Modellbezeichnung wird pro Session an den jeweiligen Provider weitergereicht. Ohne explizite Auswahl nutzt jeder Provider seinen dokumentierten Standard.
+
 ## Unterstützte Provider
 
 ### 1. MockProvider (Standard)
@@ -20,7 +22,12 @@ Der Linux Cowork Agent unterstützt ein modulares Provider-System, welches über
 - **Anwendungsfall**: Produktiver Agentenbetrieb.
 - **Funktionsweise**: Sendet Screenshots direkt als Image-Blocks und wertet diese über GPT-4o Vision aus.
 
-### 4. Ollama (Lokale Modelle)
+### 4. OpenRouter
+- **Modellbezeichnung**: `openai/gpt-4o` oder ein anderes Vision-fähiges OpenRouter-Modell.
+- **Anwendungsfall**: Produktiver Agentenbetrieb über eine einheitliche Multi-Provider-Schnittstelle.
+- **Funktionsweise**: Nutzt die OpenAI-kompatible Chat-Completions-API von OpenRouter inklusive Screenshot-Image-Blocks.
+
+### 5. Ollama (Lokale Modelle)
 - **Modellbezeichnung**: `llama3.2-vision` oder `llava`
 - **Anwendungsfall**: 100% lokaler und datenschutzfreundlicher Betrieb ohne Internetverbindung.
 - **Anforderung**: Ein lokal laufender Ollama-Server auf dem Host-System mit geladenem Vision-Modell.

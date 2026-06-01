@@ -10,6 +10,9 @@ class LogEntry(BaseModel):
     action_type: str
     action_params: Dict[str, Any]
     screenshot_base64: Optional[str] = None
+    screenshot_role: str = "desktop"  # desktop, zoom_region
+    screenshot_width: Optional[int] = None
+    screenshot_height: Optional[int] = None
     output: Optional[str] = None
     error: Optional[str] = None
     risk: str = "low"

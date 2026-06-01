@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-tk \
     scrot \
+    xclip \
+    xdotool \
+    wmctrl \
+    x11-utils \
     novnc \
     websockify \
     dbus-x11 \

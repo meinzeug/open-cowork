@@ -28,3 +28,13 @@ Triggert eine Aktion das Sicherheits-Gateway:
 3. Im Frontend-Dashboard erscheint ein aufmerksamkeitsstarkes Modal-Fenster mit der genauen Begründung der Sperre und der geplanten Aktion.
 4. Der Nutzer kann die Aktion entweder **freigeben** (der Agent führt sie einmalig aus und macht weiter) oder **ablehnen** (die Sitzung wird abgebrochen).
 5. Über ein Textfeld kann dem Agenten zudem direktes Feedback gegeben werden (z.B. "Nein, lies stattdessen Datei X").
+
+### 4. Visuelle Inspektion
+- `inspect_region` ist eine reine Beobachtungsaktion: Das Backend erzeugt aus dem aktuellen Screenshot einen vergrößerten Ausschnitt und verändert weder Desktop noch Dateisystem.
+- Die Aktion wird als niedriges Risiko eingestuft und benötigt keine Freigabe.
+
+### 5. Native Desktop-Aktionen
+- `list_windows`, `active_window`, `focus_window`, `list_apps` und `clipboard_get` sind nicht-destruktive Desktop-Abfragen bzw. Fokusoperationen und gelten als niedriges Risiko.
+- `close_window` wird als mittleres Risiko bewertet, weil ungespeicherte UI-Daten verloren gehen können.
+- `open_url` blockiert nicht-HTTP(S)-Schemata und zahlungs-/loginnahe Domains gemäß Blocklist.
+- `clipboard_set` wird wie Texteingabe geprüft und erkennt sensible Begriffe sowie Kreditkartenmuster.

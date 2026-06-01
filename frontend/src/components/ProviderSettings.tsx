@@ -42,6 +42,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       setLocalModel("claude-3-5-sonnet-20241022");
     } else if (val === "openai") {
       setLocalModel("gpt-4o");
+    } else if (val === "openrouter") {
+      setLocalModel("openai/gpt-4o");
     } else if (val === "ollama") {
       setLocalModel("llama3.2-vision");
     }
@@ -66,6 +68,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             <option value="mock">MockProvider (Lokaler Test)</option>
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="openai">OpenAI (GPT-4o)</option>
+            <option value="openrouter">OpenRouter (Multi-Provider)</option>
             <option value="ollama">Ollama (Lokale Vision)</option>
           </select>
         </div>

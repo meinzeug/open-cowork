@@ -8,23 +8,37 @@ from app.models.actions import ActionResponse, Action
 logger = logging.getLogger(__name__)
 
 class OpenAIProvider(BaseProvider):
-    def __init__(self, api_key: str):
+    def __init__(
+        self,
+        api_key: str,
+        api_url: str = "https://api.openai.com/v1/chat/completions",
+        default_model: str = "gpt-4o",
+        provider_name: str = "OpenAI",
+        extra_headers: Dict[str, str] | None = None
+    ):
         self.api_key = api_key
-        self.api_url = "https://api.openai.com/v1/chat/completions"
+        self.api_url = api_url
+        self.default_model = default_model
+        self.provider_name = provider_name
+        self.extra_headers = extra_headers or {}
 
     async def generate_action(
         self,
         task: str,
         screenshot_base64: str,
         history: List[Dict[str, Any]],
-        system_prompt: str
+        system_prompt: str,
+        previous_screenshot_base64: str | None = None,
+        focused_screenshot_base64: str | None = None,
+        model: str | None = None
     ) -> ActionResponse:
         if not self.api_key:
-            raise ValueError("OpenAI API Key ist nicht konfiguriert.")
+            raise ValueError(f"{self.provider_name} API Key ist nicht konfiguriert.")
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            **self.extra_headers
         }
 
         # Build messages starting with system prompt
@@ -62,19 +76,51 @@ class OpenAIProvider(BaseProvider):
                 "content": env_content
             })
 
-        # Add current screenshot
+        # Add current screenshot and optional previous frame for visual reflection.
         current_content = [
             {
                 "type": "text",
                 "text": f"Aktueller Schritt. Gesamtaufgabe: {task}"
-            },
+            }
+        ]
+        if previous_screenshot_base64:
+            current_content.extend([
+                {
+                    "type": "text",
+                    "text": "Vorheriger Screenshot vor der letzten Aktion. Vergleiche ihn mit dem aktuellen Screenshot."
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{previous_screenshot_base64}"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "Aktueller Screenshot nach der letzten Aktion:"
+                }
+            ])
+        if focused_screenshot_base64:
+            current_content.extend([
+                {
+                    "type": "text",
+                    "text": "Zuletzt angeforderter vergrößerter Ausschnitt. Nutze ihn für präzise Texterkennung und Koordinatenplanung:"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{focused_screenshot_base64}"
+                    }
+                }
+            ])
+        current_content.append(
             {
                 "type": "image_url",
                 "image_url": {
                     "url": f"data:image/png;base64,{screenshot_base64}"
                 }
             }
-        ]
+        )
 
         messages.append({
             "role": "user",
@@ -82,7 +128,7 @@ class OpenAIProvider(BaseProvider):
         })
 
         data = {
-            "model": "gpt-4o",
+            "model": model or self.default_model,
             "messages": messages,
             "response_format": {"type": "json_object"},
             "temperature": 0.0,
@@ -91,11 +137,11 @@ class OpenAIProvider(BaseProvider):
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = client.post(self.api_url, headers=headers, json=data)
+                response = await client.post(self.api_url, headers=headers, json=data)
 
             if response.status_code != 200:
-                logger.error(f"OpenAI API Fehler ({response.status_code}): {response.text}")
-                raise Exception(f"OpenAI API returned status {response.status_code}: {response.text}")
+                logger.error(f"{self.provider_name} API Fehler ({response.status_code}): {response.text}")
+                raise Exception(f"{self.provider_name} API returned status {response.status_code}: {response.text}")
 
             result = response.json()
             response_text = result["choices"][0]["message"]["content"].strip()
@@ -114,9 +160,9 @@ class OpenAIProvider(BaseProvider):
             )
 
         except Exception as e:
-            logger.error(f"OpenAI Provider Exception: {e}")
+            logger.error(f"{self.provider_name} Provider Exception: {e}")
             return ActionResponse(
-                summary=f"Fehler bei der Kommunikation mit OpenAI: {str(e)}",
+                summary=f"Fehler bei der Kommunikation mit {self.provider_name}: {str(e)}",
                 risk="low",
                 requires_confirmation=False,
                 action=Action(type="wait", params={"seconds": 5}),

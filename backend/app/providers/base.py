@@ -9,7 +9,10 @@ class BaseProvider(ABC):
         task: str,
         screenshot_base64: str,
         history: List[Dict[str, Any]],
-        system_prompt: str
+        system_prompt: str,
+        previous_screenshot_base64: str | None = None,
+        focused_screenshot_base64: str | None = None,
+        model: str | None = None
     ) -> ActionResponse:
         """
         Sends the task, current screenshot and step history to the LLM.

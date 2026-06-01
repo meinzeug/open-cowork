@@ -9,7 +9,10 @@ class MockProvider(BaseProvider):
         task: str,
         screenshot_base64: str,
         history: List[Dict[str, Any]],
-        system_prompt: str
+        system_prompt: str,
+        previous_screenshot_base64: str | None = None,
+        focused_screenshot_base64: str | None = None,
+        model: str | None = None
     ) -> ActionResponse:
         # Simulate small network latency
         await asyncio.sleep(1.0)
@@ -119,6 +122,102 @@ class MockProvider(BaseProvider):
             else:
                 return ActionResponse(
                     summary="Die sensible Datei wurde erfolgreich gelöscht. Aufgabe beendet.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="finish", params={}),
+                    done=True
+                )
+
+        # Workflow 4: Zoom / region inspection
+        elif "zoom" in task_lower or "inspect" in task_lower or "ausschnitt" in task_lower:
+            if step == 0:
+                return ActionResponse(
+                    summary="Ich erstelle zuerst einen vergrößerten Screenshot-Ausschnitt, um kleine Desktop-Details genauer zu prüfen.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="inspect_region", params={
+                        "x": 120,
+                        "y": 80,
+                        "width": 320,
+                        "height": 220,
+                        "scale": 3
+                    }),
+                    done=False
+                )
+            else:
+                return ActionResponse(
+                    summary="Der vergrößerte Ausschnitt wurde erzeugt und steht für die nächste Planung zur Verfügung.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="finish", params={}),
+                    done=True
+                )
+
+        # Workflow 5: Native desktop integration
+        elif "fenster" in task_lower or "window" in task_lower or "desktop" in task_lower:
+            if step == 0:
+                return ActionResponse(
+                    summary="Ich frage die sichtbaren Linux-Desktop-Fenster über die native X11-Fensterverwaltung ab.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="list_windows", params={}),
+                    done=False
+                )
+            elif step == 1:
+                return ActionResponse(
+                    summary="Ich prüfe zusätzlich das aktuell aktive Fenster, um Fokus und Geometrie zu kennen.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="active_window", params={}),
+                    done=False
+                )
+            else:
+                return ActionResponse(
+                    summary="Die Desktop-Fensterintegration wurde erfolgreich abgefragt.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="finish", params={}),
+                    done=True
+                )
+
+        elif "app" in task_lower or "programm" in task_lower:
+            if step == 0:
+                return ActionResponse(
+                    summary="Ich lese den installierten Linux-App-Katalog aus den .desktop-Dateien aus.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="list_apps", params={}),
+                    done=False
+                )
+            else:
+                return ActionResponse(
+                    summary="Der App-Katalog wurde erfolgreich abgefragt.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="finish", params={}),
+                    done=True
+                )
+
+        elif "clipboard" in task_lower or "zwischenablage" in task_lower:
+            if step == 0:
+                return ActionResponse(
+                    summary="Ich setze testweise die X11-Zwischenablage mit einem harmlosen Text.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="clipboard_set", params={"text": "Open Cowork Clipboard Test"}),
+                    done=False
+                )
+            elif step == 1:
+                return ActionResponse(
+                    summary="Ich lese die X11-Zwischenablage zurück, um die Integration zu verifizieren.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="clipboard_get", params={}),
+                    done=False
+                )
+            else:
+                return ActionResponse(
+                    summary="Die Clipboard-Integration wurde erfolgreich geprüft.",
                     risk="low",
                     requires_confirmation=False,
                     action=Action(type="finish", params={}),

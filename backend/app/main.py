@@ -1,19 +1,20 @@
-import os
 import logging
 import httpx
-from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Header
+from typing import List, Optional
+from fastapi import FastAPI, HTTPException, Header, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketDisconnect
 from pydantic import BaseModel
 
 from app.config import settings
 from app.models.messages import SessionState, TaskRequest, ConfirmationRequest
 from app.sessions.manager import session_manager
+from app.events import session_event_hub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("backend_main")
 
-app = FastAPI(title="Linux Cowork Agent Backend", version="1.0")
+app = FastAPI(title="Linux Cowork Agent Backend", version="1.1.0")
 
 # Setup CORS to allow React Frontend to connect from any origin (development environment)
 app.add_middleware(
@@ -76,41 +77,77 @@ def create_session(req: TaskRequest):
 
 
 @app.post("/api/sessions/{session_id}/start")
-def start_session(session_id: str, x_api_key: Optional[str] = Header(None)):
+async def start_session(session_id: str, x_api_key: Optional[str] = Header(None)):
     try:
         session_manager.start_session(session_id, api_key=x_api_key or "")
+        session = session_manager.get_session(session_id)
+        if session:
+            await session_event_hub.publish(session, "session.running")
         return {"success": True, "status": "running"}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/sessions/{session_id}/pause")
-def pause_session(session_id: str):
+async def pause_session(session_id: str):
     try:
         session_manager.pause_session(session_id)
+        session = session_manager.get_session(session_id)
+        if session:
+            await session_event_hub.publish(session, "session.paused")
         return {"success": True, "status": "paused"}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/api/sessions/{session_id}/stop")
-def stop_session(session_id: str):
+async def stop_session(session_id: str):
     try:
         session_manager.stop_session(session_id)
+        session = session_manager.get_session(session_id)
+        if session:
+            await session_event_hub.publish(session, "session.stopped")
         return {"success": True, "status": "stopped"}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/api/sessions/{session_id}/reset")
-def reset_session(session_id: str):
+async def reset_session(session_id: str):
     try:
         session_manager.reset_session(session_id)
+        session = session_manager.get_session(session_id)
+        if session:
+            await session_event_hub.publish(session, "session.reset")
         return {"success": True, "status": "idle"}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.websocket("/api/sessions/{session_id}/events")
+async def session_events(session_id: str, websocket: WebSocket):
+    session = session_manager.get_session(session_id)
+    if not session:
+        await websocket.close(code=4404, reason="Session nicht gefunden")
+        return
+
+    await session_event_hub.connect(session_id, websocket)
+    try:
+        await websocket.send_json({
+            "type": "session.snapshot",
+            "session_id": session.session_id,
+            "session": session.model_dump()
+        })
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await session_event_hub.disconnect(session_id, websocket)
 
 
 @app.post("/api/sessions/{session_id}/confirm")

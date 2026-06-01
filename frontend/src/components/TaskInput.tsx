@@ -84,7 +84,7 @@ export const TaskInput: React.FC<TaskInputProps> = ({
                 </button>
               ) : null}
 
-              {status === "paused" || status === "pending_confirmation" ? (
+              {status === "paused" ? (
                 <button 
                   type="button" 
                   className="btn btn-primary"

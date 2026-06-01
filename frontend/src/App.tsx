@@ -5,7 +5,9 @@ import { ProviderSettings } from "./components/ProviderSettings";
 import { ActionLog } from "./components/ActionLog";
 import { SafetyDialog } from "./components/SafetyDialog";
 
-const BACKEND_BASE = "http://localhost:8000";
+const BACKEND_BASE = (import.meta.env.VITE_BACKEND_URL ?? `http://${window.location.hostname}:8000`).replace(/\/$/, "");
+const BACKEND_WS_BASE = BACKEND_BASE.replace(/^http/, "ws");
+const TERMINAL_STATUSES = new Set(["idle", "stopped", "completed", "error"]);
 
 interface LogEntry {
   step: number;
@@ -14,6 +16,9 @@ interface LogEntry {
   action_type: string;
   action_params: Record<string, any>;
   screenshot_base64?: string | null;
+  screenshot_role?: string;
+  screenshot_width?: number | null;
+  screenshot_height?: number | null;
   output?: string | null;
   error?: string | null;
   risk: string;
@@ -47,9 +52,36 @@ export const App: React.FC = () => {
   // Direct connect to host Websockify mapped port
   const [vncUrl, setVncUrl] = useState(`http://${window.location.hostname}:6080/vnc.html?autoconnect=true&resize=scale`);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<number | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
 
-  // Poll session state
+  const stopPolling = () => {
+    if (pollIntervalRef.current !== null) {
+      window.clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  const clearReconnectTimer = () => {
+    if (reconnectTimeoutRef.current !== null) {
+      window.clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  };
+
+  const stopSessionEvents = () => {
+    clearReconnectTimer();
+    activeSessionIdRef.current = null;
+
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  };
+
   const fetchSessionState = async (sessionId: string) => {
     try {
       const res = await fetch(`${BACKEND_BASE}/api/sessions/${sessionId}`);
@@ -57,9 +89,9 @@ export const App: React.FC = () => {
         const data = await res.json();
         setSession(data);
         
-        // Stop polling if session finished
-        if (["idle", "stopped", "completed", "error"].includes(data.status)) {
+        if (TERMINAL_STATUSES.has(data.status)) {
           stopPolling();
+          stopSessionEvents();
         }
       }
     } catch (e) {
@@ -69,21 +101,74 @@ export const App: React.FC = () => {
 
   const startPolling = (sessionId: string) => {
     stopPolling();
-    pollIntervalRef.current = setInterval(() => {
+    pollIntervalRef.current = window.setInterval(() => {
       fetchSessionState(sessionId);
     }, 1500);
   };
 
-  const stopPolling = () => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+  const connectSessionEvents = (sessionId: string) => {
+    const existingSocket = wsRef.current;
+    if (
+      activeSessionIdRef.current === sessionId &&
+      existingSocket &&
+      (existingSocket.readyState === WebSocket.OPEN || existingSocket.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
     }
+
+    clearReconnectTimer();
+    if (existingSocket) {
+      existingSocket.onclose = null;
+      existingSocket.close();
+    }
+
+    activeSessionIdRef.current = sessionId;
+    const socket = new WebSocket(`${BACKEND_WS_BASE}/api/sessions/${sessionId}/events`);
+    wsRef.current = socket;
+
+    socket.onopen = () => {
+      stopPolling();
+      clearReconnectTimer();
+    };
+
+    socket.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data);
+        if (!event.session) return;
+
+        setSession(event.session);
+        if (TERMINAL_STATUSES.has(event.session.status)) {
+          stopPolling();
+          stopSessionEvents();
+        }
+      } catch (e) {
+        console.error("Error parsing session event:", e);
+      }
+    };
+
+    socket.onerror = () => {
+      socket.close();
+    };
+
+    socket.onclose = () => {
+      if (wsRef.current === socket) {
+        wsRef.current = null;
+      }
+      if (activeSessionIdRef.current !== sessionId) return;
+
+      startPolling(sessionId);
+      reconnectTimeoutRef.current = window.setTimeout(() => {
+        connectSessionEvents(sessionId);
+      }, 2000);
+    };
   };
 
   useEffect(() => {
     // Clean up timers on unmount
-    return () => stopPolling();
+    return () => {
+      stopPolling();
+      stopSessionEvents();
+    };
   }, []);
 
   // Handlers
@@ -93,6 +178,8 @@ export const App: React.FC = () => {
       
       // 1. Create a session if it doesn't exist or is completed
       if (!activeSession || ["completed", "stopped", "error"].includes(activeSession.status)) {
+        if (!task.trim()) return;
+
         const res = await fetch(`${BACKEND_BASE}/api/sessions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -115,6 +202,8 @@ export const App: React.FC = () => {
       
       if (!activeSession) return;
 
+      connectSessionEvents(activeSession.session_id);
+
       // 2. Start session loop
       const startRes = await fetch(`${BACKEND_BASE}/api/sessions/${activeSession.session_id}/start`, {
         method: "POST",
@@ -128,7 +217,8 @@ export const App: React.FC = () => {
         setSession(prev => prev ? { ...prev, status: "running" } : null);
         startPolling(activeSession.session_id);
       } else {
-        alert("Fehler beim Starten des Agenten.");
+        const errorPayload = await startRes.json().catch(() => null);
+        alert(errorPayload?.detail || "Fehler beim Starten des Agenten.");
       }
       
     } catch (e) {
@@ -142,6 +232,7 @@ export const App: React.FC = () => {
       const res = await fetch(`${BACKEND_BASE}/api/sessions/${session.session_id}/pause`, { method: "POST" });
       if (res.ok) {
         stopPolling();
+        stopSessionEvents();
         setSession(prev => prev ? { ...prev, status: "paused" } : null);
       }
     } catch (e) {
@@ -155,6 +246,7 @@ export const App: React.FC = () => {
       const res = await fetch(`${BACKEND_BASE}/api/sessions/${session.session_id}/stop`, { method: "POST" });
       if (res.ok) {
         stopPolling();
+        stopSessionEvents();
         setSession(prev => prev ? { ...prev, status: "stopped" } : null);
       }
     } catch (e) {
@@ -168,6 +260,7 @@ export const App: React.FC = () => {
       const res = await fetch(`${BACKEND_BASE}/api/sessions/${session.session_id}/reset`, { method: "POST" });
       if (res.ok) {
         stopPolling();
+        stopSessionEvents();
         setSession(prev => prev ? { ...prev, status: "idle", current_step: 0, logs: [], pending_action: null } : null);
       }
     } catch (e) {
@@ -193,6 +286,7 @@ export const App: React.FC = () => {
       body: JSON.stringify({
         anthropic_api_key: newSettings.provider === "anthropic" ? newSettings.apiKey : undefined,
         openai_api_key: newSettings.provider === "openai" ? newSettings.apiKey : undefined,
+        openrouter_api_key: newSettings.provider === "openrouter" ? newSettings.apiKey : undefined,
         default_provider: newSettings.provider,
         default_model: newSettings.model,
         max_steps: newSettings.maxSteps
@@ -208,6 +302,9 @@ export const App: React.FC = () => {
     try {
       // 1. Temporarily pause polling
       stopPolling();
+      if (approved) {
+        connectSessionEvents(session.session_id);
+      }
       
       // 2. Post confirmation
       const res = await fetch(`${BACKEND_BASE}/api/sessions/${session.session_id}/confirm`, {
@@ -228,6 +325,7 @@ export const App: React.FC = () => {
           setSession(prev => prev ? { ...prev, status: "running", pending_action: null } : null);
           startPolling(session.session_id);
         } else {
+          stopSessionEvents();
           setSession(prev => prev ? { ...prev, status: "stopped", pending_action: null } : null);
         }
       } else {

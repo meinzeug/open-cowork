@@ -6,6 +6,7 @@
 
 *   **Isolated Linux Desktop Environment**: Runs a lightweight XFCE4 desktop inside a Docker container using Xvfb (Virtual Framebuffer).
 *   **VNC/noVNC Live Stream**: Watch the agent work in real-time through a beautiful web dashboard utilizing a secure noVNC stream.
+*   **Native Linux Desktop Bridge**: Inspect and control the XFCE/X11 desktop with structured window management, active-window detection, installed application discovery, URL launch, clipboard access, screenshots, and precise zoom-region inspection.
 *   **Modular LLM Provider System**: Supports Anthropic Claude API (with native/structured computer use), OpenAI GPT-4o, OpenRouter, Ollama (for local vision models), and a **MockProvider** for testing without API keys.
 *   **Robust Safety Engine**:
     *   **Risk Scoring**: Evaluates the potential risk level (`low`, `medium`, `high`) of every action.
@@ -19,9 +20,9 @@
 
 The system operates as a three-tier architecture orchestrated via Docker Compose:
 
-1.  **`sandbox`**: The isolated virtual Ubuntu environment. It runs Xvfb, XFCE4, VNC, noVNC, and a lightweight Python **Sandbox Agent REST API** that receives commands (e.g., clicks, keys, shell scripts) from the backend and executes them locally inside the container.
-2.  **`backend`**: A FastAPI application that orchestrates the agent loop, manages sessions, parses screenshots, communicates with LLM providers, and executes safety policy verification.
-3.  **`frontend`**: A React + TypeScript frontend built with Vite. It features a modern, aesthetic dashboard containing the embedded noVNC view, interactive chat logs, provider settings, and approval dialogs.
+1.  **`sandbox`**: The isolated virtual Ubuntu environment. It runs Xvfb, XFCE4, VNC, noVNC, X11 utilities, and a lightweight Python **Sandbox Agent REST API** that receives commands (clicks, keys, shell scripts, window management, app discovery, clipboard, screenshots) from the backend and executes them locally inside the container.
+2.  **`backend`**: A FastAPI application that orchestrates the agent loop, manages sessions, streams real-time WebSocket events, sends screenshot history/zoom context to LLM providers, and executes safety policy verification.
+3.  **`frontend`**: A React + TypeScript frontend built with Vite. It features a modern dashboard containing the embedded noVNC view, real-time action logs, provider settings, zoom screenshots, and approval dialogs.
 
 ---
 

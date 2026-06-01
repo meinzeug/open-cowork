@@ -17,7 +17,10 @@ class AnthropicProvider(BaseProvider):
         task: str,
         screenshot_base64: str,
         history: List[Dict[str, Any]],
-        system_prompt: str
+        system_prompt: str,
+        previous_screenshot_base64: str | None = None,
+        focused_screenshot_base64: str | None = None,
+        model: str | None = None
     ) -> ActionResponse:
         if not self.api_key:
             raise ValueError("Anthropic API Key ist nicht konfiguriert.")
@@ -63,12 +66,49 @@ class AnthropicProvider(BaseProvider):
                 "content": env_content
             })
 
-        # Add current screenshot and user prompt
+        # Add visual context. If available, provide the previous frame first so the
+        # model can verify whether the last action changed the desktop state.
         current_content = [
             {
                 "type": "text",
                 "text": f"Aktueller Schritt. Gesamtaufgabe: {task}"
-            },
+            }
+        ]
+        if previous_screenshot_base64:
+            current_content.extend([
+                {
+                    "type": "text",
+                    "text": "Vorheriger Screenshot vor der letzten Aktion. Vergleiche ihn mit dem aktuellen Screenshot."
+                },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": previous_screenshot_base64
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "Aktueller Screenshot nach der letzten Aktion:"
+                }
+            ])
+        if focused_screenshot_base64:
+            current_content.extend([
+                {
+                    "type": "text",
+                    "text": "Zuletzt angeforderter vergrößerter Ausschnitt. Nutze ihn für präzise Texterkennung und Koordinatenplanung:"
+                },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": focused_screenshot_base64
+                    }
+                }
+            ])
+        current_content.append(
             {
                 "type": "image",
                 "source": {
@@ -77,7 +117,7 @@ class AnthropicProvider(BaseProvider):
                     "data": screenshot_base64
                 }
             }
-        ]
+        )
         
         messages.append({
             "role": "user",
@@ -85,7 +125,7 @@ class AnthropicProvider(BaseProvider):
         })
 
         data = {
-            "model": "claude-3-5-sonnet-20241022",
+            "model": model or "claude-3-5-sonnet-20241022",
             "max_tokens": 2000,
             "system": system_prompt,
             "messages": messages,
@@ -94,7 +134,7 @@ class AnthropicProvider(BaseProvider):
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = client.post(self.api_url, headers=headers, json=data)
+                response = await client.post(self.api_url, headers=headers, json=data)
                 
             if response.status_code != 200:
                 logger.error(f"Anthropic API Fehler ({response.status_code}): {response.text}")

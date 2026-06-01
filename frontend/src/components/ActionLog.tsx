@@ -8,6 +8,9 @@ interface LogEntry {
   action_type: string;
   action_params: Record<string, any>;
   screenshot_base64?: string | null;
+  screenshot_role?: string;
+  screenshot_width?: number | null;
+  screenshot_height?: number | null;
   output?: string | null;
   error?: string | null;
   risk: string;
@@ -88,6 +91,14 @@ export const ActionLog: React.FC<ActionLogProps> = ({ logs }) => {
 
                 {log.screenshot_base64 && (
                   <div style={{ position: "relative", marginTop: "6px" }}>
+                    {log.screenshot_role === "zoom_region" && (
+                      <div className="screenshot-kind-badge">
+                        Zoom-Ausschnitt
+                        {log.screenshot_width && log.screenshot_height
+                          ? ` ${log.screenshot_width}x${log.screenshot_height}`
+                          : ""}
+                      </div>
+                    )}
                     <img 
                       src={`data:image/png;base64,${log.screenshot_base64}`}
                       alt={`Screenshot step ${log.step}`}
@@ -96,7 +107,7 @@ export const ActionLog: React.FC<ActionLogProps> = ({ logs }) => {
                         borderRadius: "var(--radius-sm)", 
                         border: "1px solid var(--border-color)",
                         aspectRatio: "4/3",
-                        objectFit: "cover",
+                        objectFit: log.screenshot_role === "zoom_region" ? "contain" : "cover",
                         background: "#000"
                       }}
                     />

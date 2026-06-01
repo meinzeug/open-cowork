@@ -1,5 +1,6 @@
 import re
 import os
+from urllib.parse import urlparse
 from typing import Tuple
 from app.models.actions import Action
 from app.safety.policy import BLOCKED_SHELL_PATTERNS, MEDIUM_SHELL_PATTERNS, SENSITIVE_UI_KEYWORDS, BLOCKED_DOMAINS
@@ -23,6 +24,19 @@ class SafetyValidator:
         # Explicit user confirmation tool
         if action_type == "ask_user_confirmation":
             return "high", True, f"Agent bittet explizit um Freigabe: {params.get('message', 'Keine Nachricht hinterlassen')}"
+
+        if action_type == "inspect_region":
+            return "low", False, "Visuelle Inspektion eines Screenshot-Ausschnitts ohne Desktop-Veränderung."
+
+        if action_type in ["list_windows", "active_window", "list_apps", "clipboard_get", "focus_window"]:
+            return "low", False, "Nicht-destruktive Desktop-Inspektion oder Fensterfokus."
+
+        if action_type == "close_window":
+            risk_level = "medium"
+            reason = "Fenster schließen kann ungespeicherte Daten verwerfen."
+            if risk_policy == "confirm_medium_high":
+                requires_confirmation = True
+            return risk_level, requires_confirmation, reason
 
         # 1. Shell command safety
         if action_type == "shell_command":
@@ -91,6 +105,18 @@ class SafetyValidator:
                         requires_confirmation = True
                     break
 
+        if action_type == "clipboard_set":
+            text = params.get("text", "")
+            if re.search(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b", text):
+                return "high", True, "Ablegen von Kreditkartennummern in der Zwischenablage erfordert Bestätigung."
+            for word in SENSITIVE_UI_KEYWORDS:
+                if word in text.lower():
+                    risk_level = "medium"
+                    reason = f"Sensibles Wort '{word}' im Clipboard-Text erkannt."
+                    if risk_policy == "confirm_medium_high":
+                        requires_confirmation = True
+                    break
+
         # 4. Opening potentially critical websites or apps
         if action_type == "open_app":
             app_name = params.get("text", "")
@@ -102,5 +128,14 @@ class SafetyValidator:
                 for dom in BLOCKED_DOMAINS:
                     if re.search(dom, app_name, re.IGNORECASE):
                         return "high", True, f"Zugriff auf blockierte/zahlungspflichtige Domain verweigert: {app_name}"
+
+        if action_type == "open_url":
+            url = params.get("url", "")
+            parsed = urlparse(url if "://" in url else f"https://{url}")
+            if parsed.scheme not in ["http", "https"]:
+                return "high", True, f"Nicht unterstütztes oder potenziell gefährliches URL-Schema: {parsed.scheme}"
+            for dom in BLOCKED_DOMAINS:
+                if re.search(dom, parsed.netloc, re.IGNORECASE) or re.search(dom, url, re.IGNORECASE):
+                    return "high", True, f"Zugriff auf blockierte/zahlungspflichtige Domain verweigert: {url}"
 
         return risk_level, requires_confirmation, reason

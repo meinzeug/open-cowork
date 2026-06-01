@@ -17,7 +17,10 @@ class OllamaProvider(BaseProvider):
         task: str,
         screenshot_base64: str,
         history: List[Dict[str, Any]],
-        system_prompt: str
+        system_prompt: str,
+        previous_screenshot_base64: str | None = None,
+        focused_screenshot_base64: str | None = None,
+        model: str | None = None
     ) -> ActionResponse:
         headers = {"Content-Type": "application/json"}
 
@@ -56,16 +59,36 @@ class OllamaProvider(BaseProvider):
                 "content": env_content
             })
 
-        # Add current screenshot
+        screenshot_images = [screenshot_base64]
+        screenshot_prompt = f"Aktueller Schritt. Gesamtaufgabe: {task}"
+        if previous_screenshot_base64:
+            screenshot_images = [previous_screenshot_base64, screenshot_base64]
+            screenshot_prompt = (
+                f"Aktueller Schritt. Gesamtaufgabe: {task}\n"
+                "Bild 1 ist der vorherige Screenshot vor der letzten Aktion. "
+                "Bild 2 ist der aktuelle Screenshot. Vergleiche beide, bevor du die nächste Aktion auswählst."
+            )
+        if focused_screenshot_base64:
+            screenshot_images = (
+                [previous_screenshot_base64, focused_screenshot_base64, screenshot_base64]
+                if previous_screenshot_base64
+                else [focused_screenshot_base64, screenshot_base64]
+            )
+            screenshot_prompt = (
+                f"Aktueller Schritt. Gesamtaufgabe: {task}\n"
+                "Eines der Bilder ist ein vergrößerter Ausschnitt aus einer vorherigen inspect_region-Aktion. "
+                "Nutze diesen Ausschnitt für präzise Texterkennung, aber plane Klickkoordinaten im vollständigen Desktop-Screenshot."
+            )
+
         messages.append({
             "role": "user",
-            "content": f"Aktueller Schritt. Gesamtaufgabe: {task}",
-            "images": [screenshot_base64]
+            "content": screenshot_prompt,
+            "images": screenshot_images
         })
 
         # Default model is llama3.2-vision or llava
         data = {
-            "model": "llama3.2-vision",
+            "model": model or "llama3.2-vision",
             "messages": messages,
             "stream": False,
             "options": {
@@ -75,7 +98,7 @@ class OllamaProvider(BaseProvider):
 
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                response = client.post(self.api_url, headers=headers, json=data)
+                response = await client.post(self.api_url, headers=headers, json=data)
 
             if response.status_code != 200:
                 logger.error(f"Ollama API Fehler ({response.status_code}): {response.text}")
@@ -106,12 +129,12 @@ class OllamaProvider(BaseProvider):
         except Exception as e:
             logger.error(f"Ollama Provider Exception: {e}")
             # Try falling back to llava
-            if "llama3.2-vision" in data["model"]:
+            if data["model"] != "llava":
                 try:
                     logger.info("Versuche Fallback auf llava Modell...")
                     data["model"] = "llava"
                     async with httpx.AsyncClient(timeout=120.0) as client:
-                        response = client.post(self.api_url, headers=headers, json=data)
+                        response = await client.post(self.api_url, headers=headers, json=data)
                     if response.status_code == 200:
                         result = response.json()
                         response_text = result["message"]["content"].strip()

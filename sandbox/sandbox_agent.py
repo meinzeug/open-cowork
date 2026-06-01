@@ -2,6 +2,7 @@ import os
 import subprocess
 import base64
 import logging
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,10 +77,286 @@ class FileWriteRequest(BaseModel):
 class FileListRequest(BaseModel):
     path: Optional[str] = None
 
+class WindowRequest(BaseModel):
+    window_id: str
+
+class ClipboardSetRequest(BaseModel):
+    text: str
+
+class OpenUrlRequest(BaseModel):
+    url: str
+
+
+def run_x11_command(args: List[str], timeout: int = 5, input_text: Optional[str] = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args,
+        env=dict(os.environ, DISPLAY=DISPLAY),
+        input=input_text,
+        capture_output=True,
+        text=True,
+        timeout=timeout
+    )
+
+
+def normalize_window_id(window_id: str) -> str:
+    raw = str(window_id).strip()
+    if raw.startswith("0x"):
+        return raw
+    try:
+        return hex(int(raw))
+    except ValueError:
+        return raw
+
+
+def parse_wmctrl_window(line: str) -> Optional[Dict[str, Any]]:
+    parts = line.split(None, 8)
+    if len(parts) < 8:
+        return None
+
+    window_id = parts[0]
+    title = parts[8] if len(parts) > 8 else ""
+    try:
+        numeric_id = int(window_id, 16)
+        desktop = int(parts[1])
+        x = int(parts[2])
+        y = int(parts[3])
+        width = int(parts[4])
+        height = int(parts[5])
+    except ValueError:
+        return None
+
+    return {
+        "id": window_id,
+        "id_decimal": numeric_id,
+        "desktop": desktop,
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "host": parts[6],
+        "wm_class": parts[7],
+        "title": title
+    }
+
+
+def parse_desktop_file(path: Path) -> Optional[Dict[str, str]]:
+    values: Dict[str, str] = {}
+    try:
+        for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key in {"Type", "Name", "Name[de]", "Exec", "Icon", "NoDisplay", "Terminal", "Categories"}:
+                values[key] = value.strip()
+    except OSError:
+        return None
+
+    if values.get("Type") != "Application" or values.get("NoDisplay", "").lower() == "true":
+        return None
+    if not values.get("Name") and not values.get("Name[de]"):
+        return None
+    if not values.get("Exec"):
+        return None
+
+    command = values["Exec"].split(" %", 1)[0].strip()
+    return {
+        "name": values.get("Name[de]") or values.get("Name", path.stem),
+        "command": command,
+        "icon": values.get("Icon", ""),
+        "terminal": values.get("Terminal", "false"),
+        "categories": values.get("Categories", ""),
+        "desktop_file": str(path)
+    }
+
 
 @app.get("/health")
 def health():
     return {"status": "ok", "display": DISPLAY, "workspace": WORKSPACE_DIR}
+
+
+@app.get("/desktop/info")
+def desktop_info():
+    width, height = pyautogui.size()
+    return {
+        "success": True,
+        "display": DISPLAY,
+        "workspace": WORKSPACE_DIR,
+        "width": width,
+        "height": height,
+        "cwd": shell_state.cwd
+    }
+
+
+@app.get("/desktop/windows")
+def list_windows():
+    try:
+        res = run_x11_command(["wmctrl", "-lxG"])
+        if res.returncode != 0:
+            raise HTTPException(status_code=500, detail=res.stderr or "wmctrl failed")
+
+        windows = []
+        for line in res.stdout.splitlines():
+            parsed = parse_wmctrl_window(line)
+            if parsed:
+                windows.append(parsed)
+
+        return {"success": True, "windows": windows}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Window listing timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Window listing exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/desktop/active_window")
+def active_window():
+    try:
+        id_res = run_x11_command(["xdotool", "getactivewindow"])
+        if id_res.returncode != 0:
+            raise HTTPException(status_code=404, detail=id_res.stderr or "No active window")
+
+        window_id_decimal = id_res.stdout.strip()
+        window_id = normalize_window_id(window_id_decimal)
+        name_res = run_x11_command(["xdotool", "getwindowname", window_id_decimal])
+        geom_res = run_x11_command(["xdotool", "getwindowgeometry", "--shell", window_id_decimal])
+
+        geometry: Dict[str, int] = {}
+        for line in geom_res.stdout.splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key in {"X", "Y", "WIDTH", "HEIGHT", "SCREEN"}:
+                try:
+                    geometry[key.lower()] = int(value)
+                except ValueError:
+                    pass
+
+        return {
+            "success": True,
+            "window": {
+                "id": window_id,
+                "id_decimal": int(window_id_decimal),
+                "title": name_res.stdout.strip() if name_res.returncode == 0 else "",
+                **geometry
+            }
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Active window lookup timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Active window exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/desktop/focus_window")
+def focus_window(req: WindowRequest):
+    window_id = normalize_window_id(req.window_id)
+    try:
+        res = run_x11_command(["wmctrl", "-ia", window_id])
+        if res.returncode != 0:
+            raise HTTPException(status_code=404, detail=res.stderr or f"Window not found: {window_id}")
+        return {"success": True, "window_id": window_id}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Window focus timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Focus window exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/desktop/close_window")
+def close_window(req: WindowRequest):
+    window_id = normalize_window_id(req.window_id)
+    try:
+        res = run_x11_command(["wmctrl", "-ic", window_id])
+        if res.returncode != 0:
+            raise HTTPException(status_code=404, detail=res.stderr or f"Window not found: {window_id}")
+        return {"success": True, "window_id": window_id}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Window close timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Close window exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/desktop/apps")
+def list_apps():
+    app_dirs = [
+        Path("/usr/share/applications"),
+        Path("/usr/local/share/applications"),
+        Path("/root/.local/share/applications")
+    ]
+    apps: List[Dict[str, str]] = []
+    seen = set()
+
+    for app_dir in app_dirs:
+        if not app_dir.exists():
+            continue
+        for desktop_file in app_dir.glob("*.desktop"):
+            parsed = parse_desktop_file(desktop_file)
+            if not parsed:
+                continue
+            key = (parsed["name"], parsed["command"])
+            if key in seen:
+                continue
+            seen.add(key)
+            apps.append(parsed)
+
+    apps.sort(key=lambda item: item["name"].lower())
+    return {"success": True, "apps": apps}
+
+
+@app.post("/desktop/open_url")
+def open_url(req: OpenUrlRequest):
+    try:
+        subprocess.Popen(
+            ["firefox", "--new-window", req.url],
+            env=dict(os.environ, DISPLAY=DISPLAY),
+            preexec_fn=os.setsid,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return {"success": True, "url": req.url}
+    except Exception as e:
+        logger.error(f"Open url exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/clipboard")
+def get_clipboard():
+    try:
+        res = run_x11_command(["xclip", "-selection", "clipboard", "-o"])
+        if res.returncode != 0:
+            return {"success": True, "text": ""}
+        return {"success": True, "text": res.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Clipboard read timed out")
+    except Exception as e:
+        logger.error(f"Clipboard read exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/clipboard")
+def set_clipboard(req: ClipboardSetRequest):
+    try:
+        res = run_x11_command(["xclip", "-selection", "clipboard"], input_text=req.text)
+        if res.returncode != 0:
+            raise HTTPException(status_code=500, detail=res.stderr or "Clipboard write failed")
+        return {"success": True, "size": len(req.text)}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Clipboard write timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Clipboard write exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/screenshot")
