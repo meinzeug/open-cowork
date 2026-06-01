@@ -14,7 +14,7 @@ from app.events import session_event_hub
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("backend_main")
 
-app = FastAPI(title="Linux Cowork Agent Backend", version="1.1.0")
+app = FastAPI(title="Linux Cowork Agent Backend", version="1.1.1")
 
 # Setup CORS to allow React Frontend to connect from any origin (development environment)
 app.add_middleware(
