@@ -75,6 +75,8 @@ newgrp docker
 
 If `systemctl` reports `Unit docker.service does not exist`, your host has the Docker CLI but not the Docker Engine service. Run `git pull && ./install_ubuntu.sh`; the installer repairs this by installing Docker Engine via Docker CE packages or Ubuntu's `docker.io` fallback.
 
+If Docker is running but your group membership is not active yet, `./start.sh` falls back to `sudo docker` for the current run. Run `newgrp docker` or log out/in later for passwordless Docker access.
+
 On systems without `systemctl`, start Docker through the host's service manager and then rerun `./start.sh`.
 
 ---

@@ -26,6 +26,14 @@ docker_engine_present() {
     command -v dockerd >/dev/null 2>&1 || docker_service_exists
 }
 
+docker_info() {
+    docker info >/dev/null 2>&1
+}
+
+sudo_docker_info() {
+    sudo docker info >/dev/null 2>&1
+}
+
 install_compose() {
     if docker compose version >/dev/null 2>&1; then
         echo "✓ Docker Compose Plugin ist bereits installiert."
@@ -91,7 +99,7 @@ install_docker_from_ubuntu_repo() {
 install_or_repair_docker_engine() {
     install_base_packages
 
-    if docker info >/dev/null 2>&1; then
+    if docker_info || sudo_docker_info; then
         echo "✓ Docker Engine läuft bereits."
         return
     fi
@@ -111,7 +119,7 @@ install_or_repair_docker_engine() {
 }
 
 start_docker_daemon() {
-    if docker info >/dev/null 2>&1; then
+    if docker_info || sudo_docker_info; then
         return
     fi
 
@@ -125,7 +133,7 @@ start_docker_daemon() {
         echo "⚠️  Kein systemctl/service gefunden. Starte den Docker-Daemon manuell, bevor du ./start.sh nutzt."
     fi
 
-    if docker info >/dev/null 2>&1; then
+    if docker_info || sudo_docker_info; then
         echo "✓ Docker-Daemon läuft."
         return
     fi
