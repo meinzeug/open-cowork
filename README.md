@@ -65,11 +65,15 @@ The system operates as a three-tier architecture orchestrated via Docker Compose
 If startup fails with `failed to connect to the docker API at unix:///var/run/docker.sock`, the Docker daemon is not running or your user cannot access it.
 
 ```bash
+git pull
+./install_ubuntu.sh
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 newgrp docker
 ./start.sh
 ```
+
+If `systemctl` reports `Unit docker.service does not exist`, your host has the Docker CLI but not the Docker Engine service. Run `git pull && ./install_ubuntu.sh`; the installer repairs this by installing Docker Engine via Docker CE packages or Ubuntu's `docker.io` fallback.
 
 On systems without `systemctl`, start Docker through the host's service manager and then rerun `./start.sh`.
 
