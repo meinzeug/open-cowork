@@ -24,21 +24,50 @@ class MockProvider(BaseProvider):
         if "firefox" in task_lower or "suche" in task_lower or "browser" in task_lower:
             if step == 0:
                 return ActionResponse(
+                    summary="Komplexe Aufgabe erkannt. Ich erstelle zuerst einen Arbeitsplan in Teilschritten.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="update_plan", params={
+                        "steps": [
+                            {"description": "Firefox starten", "status": "in_progress"},
+                            {"description": "Adressleiste fokussieren und URL eingeben", "status": "pending"},
+                            {"description": "Seite laden und Ergebnis prüfen", "status": "pending"}
+                        ],
+                        "notes": "Ziel: Websuche im Browser durchführen."
+                    }),
+                    done=False
+                )
+            elif step == 1:
+                return ActionResponse(
                     summary="Ich sehe das leere Desktop-System und starte den Webbrowser Firefox.",
                     risk="low",
                     requires_confirmation=False,
                     action=Action(type="open_app", params={"text": "firefox"}),
                     done=False
                 )
-            elif step == 1:
+            elif step == 2:
                 return ActionResponse(
-                    summary="Firefox wurde gestartet. Ich klicke nun in die Adressleiste, um eine Suche zu starten.",
+                    summary="Firefox wurde gestartet. Ich markiere Schritt 1 als erledigt und klicke in die Adressleiste.",
+                    risk="low",
+                    requires_confirmation=False,
+                    action=Action(type="update_plan", params={
+                        "steps": [
+                            {"description": "Firefox starten", "status": "done"},
+                            {"description": "Adressleiste fokussieren und URL eingeben", "status": "in_progress"},
+                            {"description": "Seite laden und Ergebnis prüfen", "status": "pending"}
+                        ]
+                    }),
+                    done=False
+                )
+            elif step == 3:
+                return ActionResponse(
+                    summary="Ich klicke nun in die Adressleiste, um eine Suche zu starten.",
                     risk="low",
                     requires_confirmation=False,
                     action=Action(type="left_click", params={"x": 300, "y": 80}),
                     done=False
                 )
-            elif step == 2:
+            elif step == 4:
                 return ActionResponse(
                     summary="Ich gebe die Suchadresse für Google ein.",
                     risk="low",
@@ -46,7 +75,7 @@ class MockProvider(BaseProvider):
                     action=Action(type="type_text", params={"text": "https://www.google.com"}),
                     done=False
                 )
-            elif step == 3:
+            elif step == 5:
                 return ActionResponse(
                     summary="Ich sende den Befehl ab, um die Seite zu laden.",
                     risk="low",
@@ -54,12 +83,19 @@ class MockProvider(BaseProvider):
                     action=Action(type="key", params={"key": "enter"}),
                     done=False
                 )
-            elif step == 4:
+            elif step == 6:
                 return ActionResponse(
-                    summary="Ich warte kurz, bis Google geladen wurde.",
+                    summary="Ich warte kurz, bis Google geladen wurde, und schließe danach den Plan ab.",
                     risk="low",
                     requires_confirmation=False,
-                    action=Action(type="wait", params={"seconds": 3}),
+                    action=Action(type="update_plan", params={
+                        "steps": [
+                            {"description": "Firefox starten", "status": "done"},
+                            {"description": "Adressleiste fokussieren und URL eingeben", "status": "done"},
+                            {"description": "Seite laden und Ergebnis prüfen", "status": "done"}
+                        ],
+                        "notes": "Alle Teilschritte erledigt."
+                    }),
                     done=False
                 )
             else:

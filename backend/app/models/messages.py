@@ -3,6 +3,10 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from app.models.actions import ActionResponse
 
+class PlanStep(BaseModel):
+    description: str
+    status: str = "pending"  # pending, in_progress, done
+
 class LogEntry(BaseModel):
     step: int
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
@@ -19,6 +23,7 @@ class LogEntry(BaseModel):
     requires_confirmation: bool = False
     confirmed_by_user: Optional[bool] = None
     status: str = "pending"  # pending, executed, denied, failed
+    screen_change_ratio: Optional[float] = None  # how much the screen changed after this action (0..1)
 
 class SessionState(BaseModel):
     session_id: str
@@ -30,6 +35,10 @@ class SessionState(BaseModel):
     max_steps: int = 30
     logs: List[LogEntry] = Field(default_factory=list)
     pending_action: Optional[ActionResponse] = None
+    plan: List[PlanStep] = Field(default_factory=list)
+    notes: Optional[str] = None
+    stuck_counter: int = 0
+    last_change_ratio: Optional[float] = None
 
 class TaskRequest(BaseModel):
     task: str

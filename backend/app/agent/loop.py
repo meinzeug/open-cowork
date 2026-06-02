@@ -4,7 +4,7 @@ import httpx
 from typing import Dict, Any, Tuple, Optional
 
 from app.config import settings
-from app.models.messages import SessionState, LogEntry
+from app.models.messages import SessionState, LogEntry, PlanStep
 from app.models.actions import ActionResponse
 from app.events import session_event_hub
 from app.safety.validator import SafetyValidator
@@ -13,7 +13,7 @@ from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.openai_provider import OpenAIProvider
 from app.providers.openrouter_provider import OpenRouterProvider
 from app.providers.ollama_provider import OllamaProvider
-from app.agent.vision import crop_and_zoom_png
+from app.agent.vision import crop_and_zoom_png, annotate_grid, compute_change_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +26,10 @@ Dir steht ein Bildschirm zur Verfügung, und du kannst Tastatur- und Mausaktione
 - Die Bildschirmauflösung beträgt üblicherweise 1024x768 Pixel.
 - Die Koordinaten beginnen oben links bei (0,0) und enden unten rechts bei (1024,768).
 - WICHTIG: Klicke genau in die Mitte der Elemente (z.B. App-Symbole, Eingabefelder, Schaltflächen), die du bedienen möchtest.
+- Auf dem Screenshot kann ein dünnes Koordinatenraster mit beschrifteten Zahlen (z.B. 100, 200, 300 ...) eingeblendet sein. Diese Linien sind NICHT Teil der Oberfläche, sondern eine Orientierungshilfe: Lies an ihnen die exakten x/y-Pixel des Zielelements ab und gib genau diese Koordinaten an.
 - Warte nach dem Öffnen von Apps immer ein paar Sekunden, bis das Fenster geladen ist.
 - Wenn dir ein vorheriger Screenshot bereitgestellt wird, vergleiche ihn mit dem aktuellen Screenshot. Nutze diesen Vergleich, um zu prüfen, ob die letzte Aktion gewirkt hat, bevor du die nächste Aktion auswählst.
+- Das System misst automatisch, wie stark sich der Bildschirm nach deiner letzten Aktion verändert hat. Wenn dir gemeldet wird, dass sich kaum etwas verändert hat, hatte deine Aktion vermutlich keine Wirkung – wiederhole sie NICHT identisch, sondern ändere die Koordinaten oder das Vorgehen.
 - Wenn Text, Icons oder Koordinaten unklar sind, nutze zuerst `inspect_region` für einen vergrößerten Ausschnitt. Plane danach Klicks weiterhin im vollständigen Desktop-Koordinatensystem.
 
 ### VERFÜGBARE AKTIONEN (TOOLS)
@@ -79,10 +81,21 @@ Die Aktion, die du zurückgibst, MUSS genau einem der folgenden Typen entspreche
     - Parameter: `{}`
 23. `clipboard_set`: Setzt die X11-Zwischenablage auf Text.
     - Parameter: `{"text": "Inhalt"}`
-24. `ask_user_confirmation`: Fragt den Benutzer explizit um Erlaubnis vor einer potenziell riskanten Aktion.
+24. `update_plan`: Erstellt oder aktualisiert deinen Arbeitsplan in Teilschritten. Nutze diese Aktion ZUERST bei komplexen Aufgaben und immer dann, wenn ein Teilschritt erledigt ist, um den Fortschritt zu markieren. Diese Aktion verändert den Desktop nicht.
+   - Parameter: `{"steps": [{"description": "Firefox öffnen", "status": "done"}, {"description": "Wikipedia suchen", "status": "in_progress"}, {"description": "Artikel speichern", "status": "pending"}], "notes": "Kurze Notizen für dein Gedächtnis (optional)"}`
+   - Erlaubte `status`-Werte: `pending`, `in_progress`, `done`.
+25. `ask_user_confirmation`: Fragt den Benutzer explizit um Erlaubnis vor einer potenziell riskanten Aktion.
     - Parameter: `{"message": "Warum brauchst du die Freigabe?"}`
-25. `finish`: Beendet die Aufgabe erfolgreich.
+26. `finish`: Beendet die Aufgabe erfolgreich.
     - Parameter: `{}`
+
+### ARBEITSWEISE FÜR HOHE AUTONOMIE
+- PLANE ZUERST: Zerlege komplexe Aufgaben mit `update_plan` in klare, überprüfbare Teilschritte, bevor du handelst.
+- REFLEKTIERE NACH JEDEM SCHRITT: Prüfe anhand des aktuellen Screenshots, ob die letzte Aktion das gewünschte Ergebnis erzielt hat. Schreibe ausdrücklich in `summary`: "Ich habe Schritt X überprüft ...". Erst wenn ein Schritt bestätigt korrekt ist, markiere ihn als `done` und gehe weiter.
+- BEI STILLSTAND: Wenn eine Aktion zweimal nicht wirkt, ändere die Strategie (z.B. Tastaturkürzel statt Mausklick, Fenster fokussieren, scrollen, `inspect_region` zur Prüfung) statt sie blind zu wiederholen.
+- TASTATUR BEVORZUGEN: Dropdowns, Scrollbalken und Menüs lassen sich oft zuverlässiger per Tastenkürzel als per Maus bedienen.
+- PRÄZISE KLICKS: Beschreibe das Zielelement positional (z.B. "der blaue Senden-Button unten rechts") und klicke genau in dessen Mitte.
+- ARBEITE EIGENSTÄNDIG WEITER, bis die Gesamtaufgabe vollständig erfüllt ist. Beende erst dann mit `finish`.
 
 ### AUSGABEFORMAT
 Du MUSS ausschließlich im folgenden strukturierten JSON-Format antworten. Gib keinen Text vor oder nach dem JSON aus. Setze das JSON nicht in zusätzliche Anführungszeichen.
@@ -103,10 +116,108 @@ Du MUSS ausschließlich im folgenden strukturierten JSON-Format antworten. Gib k
 - Wenn du eine Aktion vorschlägst, die Daten löschen (`rm`), Systempakete installieren (`apt`), sudo-Rechte nutzen oder persönliche Daten/Zahlungen eingeben könnte, frage IMMER zuerst um Erlaubnis über `ask_user_confirmation` oder setze `requires_confirmation: true`.
 """
 
+# Number of consecutive identical actions before the agent is nudged to change strategy.
+STUCK_THRESHOLD = 2
+
+
+def _action_signature(action_type: str, params: Dict[str, Any]) -> str:
+    """Stable signature of an action used for loop/stuck detection."""
+    try:
+        import json as _json
+        return f"{action_type}:{_json.dumps(params, sort_keys=True, ensure_ascii=False)}"
+    except Exception:
+        return f"{action_type}:{params}"
+
+
+def _render_plan(plan: list) -> str:
+    """Render the current plan as a readable checklist for the LLM context."""
+    if not plan:
+        return ""
+    symbols = {"done": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+    lines = []
+    for idx, step in enumerate(plan, start=1):
+        status = getattr(step, "status", "pending")
+        desc = getattr(step, "description", str(step))
+        lines.append(f"{idx}. {symbols.get(status, '[ ]')} {desc}")
+    return "\n".join(lines)
+
+
+def build_task_context(session: SessionState) -> str:
+    """
+    Compose the full task context handed to the provider: the original goal,
+    the live plan with progress, persistent agent notes, and a stuck warning
+    when the agent keeps repeating the same ineffective action.
+    """
+    parts = [session.task]
+
+    plan_text = _render_plan(session.plan)
+    if plan_text:
+        parts.append("\n### AKTUELLER ARBEITSPLAN (Fortschritt)\n" + plan_text)
+
+    if session.notes:
+        parts.append("\n### DEINE NOTIZEN\n" + session.notes)
+
+    if session.last_change_ratio is not None:
+        pct = round(session.last_change_ratio * 100, 1)
+        if session.last_change_ratio < settings.VISION_NO_EFFECT_THRESHOLD:
+            parts.append(
+                f"\n### 👁️ BILDSCHIRM-WAHRNEHMUNG\nDeine letzte Aktion hat den Bildschirm nur um ~{pct}% verändert "
+                "– sie hatte vermutlich KEINE Wirkung. Prüfe, ob du das richtige Element getroffen hast, "
+                "und wähle eine andere Vorgehensweise (andere Koordinaten, Tastaturkürzel, Fenster fokussieren)."
+            )
+        else:
+            parts.append(
+                f"\n### 👁️ BILDSCHIRM-WAHRNEHMUNG\nDer Bildschirm hat sich seit der letzten Aktion um ~{pct}% verändert. "
+                "Bewerte anhand des aktuellen Screenshots, ob das das gewünschte Ergebnis ist."
+            )
+
+    if session.stuck_counter >= STUCK_THRESHOLD:
+        parts.append(
+            "\n### ⚠️ HINWEIS: MÖGLICHER STILLSTAND\n"
+            f"Du hast eine sehr ähnliche Aktion {session.stuck_counter + 1}x in Folge ausgeführt, "
+            "ohne erkennbaren Fortschritt. Wechsle JETZT die Strategie: nutze Tastaturkürzel, "
+            "fokussiere ein anderes Fenster, scrolle, prüfe mit `inspect_region` oder überdenke "
+            "deinen Plan mit `update_plan`. Wiederhole nicht erneut dieselbe Aktion."
+        )
+
+    return "\n".join(parts)
+
+
+def apply_plan_update(session: SessionState, params: Dict[str, Any]) -> str:
+    """Apply an update_plan action to the session state. Returns a summary string."""
+    steps = params.get("steps")
+    updated = False
+    if isinstance(steps, list):
+        new_plan = []
+        for raw in steps:
+            if isinstance(raw, dict):
+                desc = str(raw.get("description", "")).strip()
+                status = str(raw.get("status", "pending")).strip().lower()
+                if status not in ("pending", "in_progress", "done"):
+                    status = "pending"
+                if desc:
+                    new_plan.append(PlanStep(description=desc, status=status))
+            elif isinstance(raw, str) and raw.strip():
+                new_plan.append(PlanStep(description=raw.strip(), status="pending"))
+        session.plan = new_plan
+        updated = True
+
+    notes = params.get("notes")
+    if isinstance(notes, str) and notes.strip():
+        session.notes = notes.strip()
+        updated = True
+
+    if not updated:
+        return "Plan unverändert (keine gültigen Schritte übergeben)."
+
+    done = sum(1 for s in session.plan if s.status == "done")
+    total = len(session.plan)
+    return f"Arbeitsplan aktualisiert: {done}/{total} Teilschritte erledigt."
+
+
 class AgentLoopManager:
     def __init__(self):
         self.active_tasks: Dict[str, asyncio.Task] = {}
-
     def get_provider(self, provider_name: str, api_key: str = "") -> Any:
         provider_name = provider_name.lower()
         if provider_name == "anthropic":
@@ -266,15 +377,42 @@ class AgentLoopManager:
             if focused_zoom_log and (not previous_desktop_log or focused_zoom_log.step >= previous_desktop_log.step)
             else None
         )
+
+        # Screen change detection: measure how much the desktop changed after the
+        # previous action so the agent can tell whether that action had any effect.
+        change_ratio = None
+        if settings.VISION_CHANGE_DETECTION and previous_screenshot_data:
+            try:
+                change_ratio = compute_change_ratio(previous_screenshot_data, screenshot_data)
+                session.last_change_ratio = change_ratio
+                if previous_desktop_log and previous_desktop_log.screen_change_ratio is None:
+                    previous_desktop_log.screen_change_ratio = change_ratio
+                logger.info(f"Screen change ratio since last action: {change_ratio:.3f}")
+            except Exception as e:
+                logger.warning(f"Change detection failed: {e}")
+
+        # Optional coordinate grid overlay to improve click accuracy. The grid is
+        # only sent to the model; the original screenshot is stored for the log/UI.
+        vision_screenshot = screenshot_data
+        if settings.VISION_GRID_OVERLAY:
+            try:
+                vision_screenshot = annotate_grid(
+                    screenshot_data, width, height, settings.VISION_GRID_SPACING
+                )
+            except Exception as e:
+                logger.warning(f"Grid overlay failed, using raw screenshot: {e}")
+                vision_screenshot = screenshot_data
+
         compact_history = [
             log.model_dump(exclude={"screenshot_base64"}) for log in session.logs[-5:]
         ]
         
         # 3. Call LLM
         logger.info(f"Calling LLM provider: {session.provider}")
+        task_context = build_task_context(session)
         action_resp: ActionResponse = await provider.generate_action(
-            task=session.task,
-            screenshot_base64=screenshot_data,
+            task=task_context,
+            screenshot_base64=vision_screenshot,
             history=compact_history,
             system_prompt=SYSTEM_PROMPT,
             previous_screenshot_base64=previous_screenshot_data,
@@ -351,8 +489,41 @@ class AgentLoopManager:
                 logger.error("Failed to inspect screenshot region: %s", e)
                 action_output = None
                 action_error = f"Zoom-Ausschnitt konnte nicht erstellt werden: {e}"
+        elif action_type == "update_plan":
+            action_output = apply_plan_update(session, params)
+            action_error = None
         else:
             action_output, action_error, params = await self.execute_action_in_sandbox(action_type, params)
+
+        # Stuck/loop detection: an action is considered unproductive when it either
+        # repeats the previous environment-changing action OR (via screen change
+        # detection) produced almost no visible change on screen.
+        _non_progress = ("inspect_region", "update_plan", "wait")
+        if action_type in _non_progress:
+            # Planning, inspection and waiting do not count towards being "stuck".
+            pass
+        else:
+            signature = _action_signature(action_type, params)
+            previous_signature = None
+            for prev in reversed(session.logs):
+                if prev.action_type not in _non_progress:
+                    previous_signature = _action_signature(prev.action_type, prev.action_params)
+                    break
+
+            repeated = signature == previous_signature and not action_error
+            # ``change_ratio`` measured at the start of this step reflects the effect
+            # of the *previous* environment-changing action.
+            ineffective = (
+                settings.VISION_CHANGE_DETECTION
+                and change_ratio is not None
+                and change_ratio < settings.VISION_NO_EFFECT_THRESHOLD
+                and previous_signature is not None
+            )
+
+            if repeated or ineffective:
+                session.stuck_counter += 1
+            else:
+                session.stuck_counter = 0
 
         # 6. Save log entry
         log_entry = LogEntry(

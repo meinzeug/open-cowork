@@ -77,6 +77,10 @@ class SessionManager:
         session.current_step = 0
         session.logs = []
         session.pending_action = None
+        session.plan = []
+        session.notes = None
+        session.stuck_counter = 0
+        session.last_change_ratio = None
         logger.info(f"Session {session_id} reset to idle.")
 
     async def confirm_action(self, session_id: str, approved: bool, feedback: Optional[str] = None, api_key: str = ""):

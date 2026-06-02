@@ -10,6 +10,7 @@ from app.config import settings
 from app.models.messages import SessionState, TaskRequest, ConfirmationRequest
 from app.sessions.manager import session_manager
 from app.events import session_event_hub
+from app.safety.network import network_policy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("backend_main")
@@ -32,6 +33,17 @@ class SettingsUpdateRequest(BaseModel):
     default_provider: Optional[str] = None
     default_model: Optional[str] = None
     max_steps: Optional[int] = None
+
+
+class NetworkPolicyUpdateRequest(BaseModel):
+    mode: Optional[str] = None
+    blocklist: Optional[List[str]] = None
+    allowlist: Optional[List[str]] = None
+
+
+class NetworkDomainRequest(BaseModel):
+    domain: str
+    list: str = "blocklist"  # blocklist or allowlist
 
 
 @app.get("/health")
@@ -213,3 +225,50 @@ def update_settings(req: SettingsUpdateRequest):
         
     logger.info("Settings updated successfully.")
     return {"success": True, "settings": get_settings()}
+
+
+@app.get("/api/network-policy")
+def get_network_policy():
+    return network_policy.snapshot()
+
+
+@app.post("/api/network-policy")
+def update_network_policy(req: NetworkPolicyUpdateRequest):
+    try:
+        network_policy.update(
+            mode=req.mode,
+            blocklist=req.blocklist,
+            allowlist=req.allowlist,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("Network policy updated (mode=%s).", network_policy.mode)
+    return {"success": True, "policy": network_policy.snapshot()}
+
+
+@app.post("/api/network-policy/domains")
+def add_network_domain(req: NetworkDomainRequest):
+    domain = req.domain.strip()
+    if not domain:
+        raise HTTPException(status_code=400, detail="Domain darf nicht leer sein.")
+    if req.list == "allowlist":
+        network_policy.add_allowed(domain)
+    elif req.list == "blocklist":
+        network_policy.add_blocked(domain)
+    else:
+        raise HTTPException(status_code=400, detail="Ungültige Liste. Erlaubt: blocklist, allowlist.")
+    return {"success": True, "policy": network_policy.snapshot()}
+
+
+@app.delete("/api/network-policy/domains")
+def remove_network_domain(domain: str, list: str = "blocklist"):
+    domain = (domain or "").strip()
+    if not domain:
+        raise HTTPException(status_code=400, detail="Domain darf nicht leer sein.")
+    if list == "allowlist":
+        network_policy.remove_allowed(domain)
+    elif list == "blocklist":
+        network_policy.remove_blocked(domain)
+    else:
+        raise HTTPException(status_code=400, detail="Ungültige Liste. Erlaubt: blocklist, allowlist.")
+    return {"success": True, "policy": network_policy.snapshot()}

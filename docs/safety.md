@@ -38,3 +38,11 @@ Triggert eine Aktion das Sicherheits-Gateway:
 - `close_window` wird als mittleres Risiko bewertet, weil ungespeicherte UI-Daten verloren gehen können.
 - `open_url` blockiert nicht-HTTP(S)-Schemata und zahlungs-/loginnahe Domains gemäß Blocklist.
 - `clipboard_set` wird wie Texteingabe geprüft und erkennt sensible Begriffe sowie Kreditkartenmuster.
+
+### 6. Netzwerk-Richtlinie (Allowlist/Blocklist)
+Eine zentrale, zur Laufzeit konfigurierbare Netzwerk-Richtlinie steuert, welche Internet-Ziele der Agent erreichen darf. Sie wird im Backend gehalten (`app/safety/network.py`) und über die REST-API (`/api/network-policy`) sowie das Dashboard verwaltet.
+
+- **Blocklist-Modus (Standard)**: Alle Domains sind erreichbar, außer denjenigen, die einem Blocklist-Eintrag entsprechen. Ein Treffer stuft die Aktion als hohes Risiko ein und erzwingt eine Nutzerfreigabe.
+- **Allowlist-Modus (Streng)**: Ausschließlich Domains auf der Allowlist sind erreichbar; jedes andere Ziel wird gesperrt und erfordert eine Freigabe. Dadurch wird unkontrollierter Datenabfluss (Data Exfiltration) durch den Agenten praktisch unmöglich.
+- **Geltungsbereich**: Die Prüfung greift bei `open_url`, beim Öffnen von URLs über Firefox (`open_app`) sowie bei netzwerkbezogenen Shell-Befehlen. Hierfür werden vollständige `http(s)`-URLs sowie nackte Hostnamen hinter Netzwerk-Tools (`curl`, `wget`, `nc`, `ssh`, `scp`, `rsync`, `ftp`, `telnet`) extrahiert und einzeln gegen die Richtlinie geprüft.
+- **Verwaltung**: `GET /api/network-policy` liefert den aktuellen Zustand, `POST /api/network-policy` ändert Modus und Listen, `POST/DELETE /api/network-policy/domains` fügt einzelne Domains hinzu oder entfernt sie.

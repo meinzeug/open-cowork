@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import { DesktopView } from "./components/DesktopView";
 import { TaskInput } from "./components/TaskInput";
 import { ProviderSettings } from "./components/ProviderSettings";
+import { NetworkPolicyPanel } from "./components/NetworkPolicyPanel";
+import { PlanPanel } from "./components/PlanPanel";
 import { ActionLog } from "./components/ActionLog";
 import { SafetyDialog } from "./components/SafetyDialog";
 
@@ -27,6 +29,11 @@ interface LogEntry {
   status: string;
 }
 
+interface PlanStep {
+  description: string;
+  status: string;
+}
+
 interface Session {
   session_id: string;
   task: string;
@@ -37,6 +44,9 @@ interface Session {
   max_steps: number;
   logs: LogEntry[];
   pending_action?: any | null;
+  plan?: PlanStep[];
+  notes?: string | null;
+  stuck_counter?: number;
 }
 
 export const App: React.FC = () => {
@@ -377,12 +387,22 @@ export const App: React.FC = () => {
 
       <main className="dashboard-grid">
         {/* Left pane - Config */}
-        <ProviderSettings 
-          provider={provider}
-          model={model}
-          maxSteps={maxSteps}
-          onSettingsChange={handleSettingsChange}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px", height: "100%", overflowY: "auto", paddingRight: "4px" }}>
+          <ProviderSettings 
+            provider={provider}
+            model={model}
+            maxSteps={maxSteps}
+            onSettingsChange={handleSettingsChange}
+          />
+
+          <NetworkPolicyPanel backendBase={BACKEND_BASE} />
+
+          <PlanPanel
+            plan={session?.plan || []}
+            notes={session?.notes}
+            stuckCounter={session?.stuck_counter}
+          />
+        </div>
 
         {/* Center pane - Sandbox desktop display & Control */}
         <div style={{ display: "flex", flexDirection: "column", gap: "20px", height: "100%", overflowY: "auto" }}>

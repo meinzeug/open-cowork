@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 from typing import Tuple
 from app.models.actions import Action
 from app.safety.policy import BLOCKED_SHELL_PATTERNS, MEDIUM_SHELL_PATTERNS, SENSITIVE_UI_KEYWORDS, BLOCKED_DOMAINS
+from app.safety.network import network_policy
 
 class SafetyValidator:
     @staticmethod
@@ -28,6 +29,9 @@ class SafetyValidator:
         if action_type == "inspect_region":
             return "low", False, "Visuelle Inspektion eines Screenshot-Ausschnitts ohne Desktop-Veränderung."
 
+        if action_type == "update_plan":
+            return "low", False, "Aktualisierung des internen Arbeitsplans ohne Desktop-Veränderung."
+
         if action_type in ["list_windows", "active_window", "list_apps", "clipboard_get", "focus_window"]:
             return "low", False, "Nicht-destruktive Desktop-Inspektion oder Fensterfokus."
 
@@ -47,6 +51,11 @@ class SafetyValidator:
                 if re.search(pattern, cmd, re.IGNORECASE):
                     return "high", True, f"Kritischer Systembefehl blockiert durch Regel: {pattern}"
             
+            # Check outbound network destinations against the network policy
+            net_allowed, net_reason = network_policy.evaluate_text(cmd)
+            if not net_allowed:
+                return "high", True, f"Netzwerkrichtlinie verletzt: {net_reason}"
+
             # Check medium blocks
             for pattern in MEDIUM_SHELL_PATTERNS:
                 if re.search(pattern, cmd, re.IGNORECASE):
@@ -123,19 +132,19 @@ class SafetyValidator:
             if any(term in app_name.lower() for term in ["rm", "dd", "mkfs", "gparted"]):
                 return "high", True, f"Ausführen einer potenziell destruktiven App blockiert: {app_name}"
             
-            # Firefox opening sensitive links
+            # Firefox opening sensitive links is governed by the network policy
             if "firefox" in app_name.lower():
-                for dom in BLOCKED_DOMAINS:
-                    if re.search(dom, app_name, re.IGNORECASE):
-                        return "high", True, f"Zugriff auf blockierte/zahlungspflichtige Domain verweigert: {app_name}"
+                net_allowed, net_reason = network_policy.evaluate_text(app_name)
+                if not net_allowed:
+                    return "high", True, f"Netzwerkrichtlinie verletzt: {net_reason}"
 
         if action_type == "open_url":
             url = params.get("url", "")
             parsed = urlparse(url if "://" in url else f"https://{url}")
             if parsed.scheme not in ["http", "https"]:
                 return "high", True, f"Nicht unterstütztes oder potenziell gefährliches URL-Schema: {parsed.scheme}"
-            for dom in BLOCKED_DOMAINS:
-                if re.search(dom, parsed.netloc, re.IGNORECASE) or re.search(dom, url, re.IGNORECASE):
-                    return "high", True, f"Zugriff auf blockierte/zahlungspflichtige Domain verweigert: {url}"
+            net_allowed, net_reason = network_policy.evaluate_url(url)
+            if not net_allowed:
+                return "high", True, f"Netzwerkrichtlinie verletzt: {net_reason}"
 
         return risk_level, requires_confirmation, reason
